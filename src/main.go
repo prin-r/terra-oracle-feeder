@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -30,8 +31,9 @@ var (
 	TERRA_CHAIN_ID     = "terra-q"
 	BAND_REST          = "http://guanyu-devnet.bandchain.org/rest/oracle/request_search?oid=64&calldata=000000044c554e410000000000002710&min_count=4&ask_count=4"
 	VALIDATOR_ADDRESS  = "terravaloper1hwjr0j6v5s8cuwtvza9jaqz7s3nfnxyw4r6st6"
+	MULTIPLIER         = int64(10000)
 	cdc                = app.MakeCodec()
-	activeDenoms       = []string{"uusd", "ukrw", "usdr", "umnt"}
+	activeDenoms       = []string{"ukrw", "uusd", "umnt", "usdr"}
 )
 
 type BandResponse struct {
@@ -301,38 +303,35 @@ func InitSDKConfig() {
 	config.Seal()
 }
 
-func getPriceFromBAND() map[string]sdk.Dec {
+func getPriceFromBAND() (map[string]sdk.Dec, error) {
 	resp, err := http.Get(BAND_REST)
 	if err != nil {
-		fmt.Println(err.Error())
-		return nil
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println(err.Error())
-		return nil
+		return nil, err
 	}
 
 	br := BandResponse{}
 	json.Unmarshal(body, &br)
 
-	fmt.Println(br)
-	return nil
-}
+	res := br.Result.Result.ResponsePacketData.Result
 
-// Mock
-var count = int64(0)
+	if len(res) != 32 {
+		return nil, fmt.Errorf(fmt.Sprintf("result size should be 32 but got %d", len(res)))
+	}
 
-// Mock
-func getPriceMock() map[string]sdk.Dec {
 	prices := map[string]sdk.Dec{}
 	for i, denom := range activeDenoms {
-		prices[denom] = sdk.NewDec((int64(i+1) * 11) + count*100)
+		prices[denom] = sdk.
+			NewDec(int64(binary.BigEndian.Uint64(res[i*8 : (i+1)*8]))).
+			Quo(sdk.NewDec(MULTIPLIER))
 	}
-	count++
-	return prices
+
+	return prices, nil
 }
 
 func hasPrevotesForAllDenom(prevotes terra_types.ExchangeRatePrevotes) bool {
@@ -410,7 +409,11 @@ func main() {
 						msgs = append(msgs, vote)
 					}
 
-					prices := getPriceMock()
+					prices, err := getPriceFromBAND()
+					if err != nil {
+						fmt.Println(err.Error())
+						return
+					}
 
 					feeder.commitNewVotes(prices)
 					newPrevotes, err := feeder.MsgPrevotesFromCurrentCommitVotes()
@@ -440,7 +443,11 @@ func main() {
 				} else {
 					fmt.Println("create new prevotes")
 
-					prices := getPriceMock()
+					prices, err := getPriceFromBAND()
+					if err != nil {
+						fmt.Println(err.Error())
+						return
+					}
 
 					feeder.commitNewVotes(prices)
 					newPrevotes, err := feeder.MsgPrevotesFromCurrentCommitVotes()
