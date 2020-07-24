@@ -29,7 +29,7 @@ var (
 	TERRA_KEYNAME      = "q"
 	TERRA_KEY_PASSWORD = "12345678"
 	TERRA_CHAIN_ID     = "terra-q"
-	BAND_REST          = "http://guanyu-devnet.bandchain.org/rest/oracle/request_search?oid=64&calldata=000000044c554e410000000000002710&min_count=4&ask_count=4"
+	BAND_REST          = "http://guanyu-devnet.bandchain.org/rest/oracle/request_search?oid=75&calldata=000000044c554e410000000000002710&min_count=4&ask_count=4"
 	VALIDATOR_ADDRESS  = "terravaloper1hwjr0j6v5s8cuwtvza9jaqz7s3nfnxyw4r6st6"
 	MULTIPLIER         = int64(10000)
 	cdc                = app.MakeCodec()
