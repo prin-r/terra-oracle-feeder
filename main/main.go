@@ -2,11 +2,12 @@ package main
 
 import (
 	"crypto/rand"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/client/context"
@@ -20,20 +21,51 @@ import (
 
 	auth_types "github.com/cosmos/cosmos-sdk/x/auth/types"
 	terra_types "github.com/terra-project/core/x/oracle"
+
+	obi "github.com/bandprotocol/band-terra-oracle/obi"
 )
 
+type LunaPriceCallData struct {
+	Symbol     string
+	Multiplier int64
+}
+
+func (cd *LunaPriceCallData) toBytes() []byte {
+	b, err := obi.Encode(*cd)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+type FxPriceCallData struct {
+	Symbols    []string
+	Multiplier int64
+}
+
+func (cd *FxPriceCallData) toBytes() []byte {
+	b, err := obi.Encode(*cd)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
 var (
-	TERRA_NODE_URI     = "http://localhost:26657"
-	TERRA_REST         = "http://localhost:1317"
-	TERRA_KEYBASE_DIR  = "/Users/mumu/.terracli"
-	TERRA_KEYNAME      = "q"
-	TERRA_KEY_PASSWORD = "12345678"
-	TERRA_CHAIN_ID     = "terra-q"
-	BAND_REST          = "http://guanyu-devnet.bandchain.org/rest/oracle/request_search?oid=75&calldata=000000044c554e410000000000002710&min_count=4&ask_count=4"
-	VALIDATOR_ADDRESS  = "terravaloper1hwjr0j6v5s8cuwtvza9jaqz7s3nfnxyw4r6st6"
-	MULTIPLIER         = int64(10000)
-	cdc                = app.MakeCodec()
-	activeDenoms       = []string{"ukrw", "uusd", "umnt", "usdr"}
+	TERRA_NODE_URI       = "http://localhost:26657"
+	TERRA_REST           = "http://localhost:1317"
+	TERRA_KEYBASE_DIR    = "/Users/mumu/.terracli"
+	TERRA_KEYNAME        = "q"
+	TERRA_KEY_PASSWORD   = "12345678"
+	TERRA_CHAIN_ID       = "terra-q"
+	MULTIPLIER           = int64(1000000)
+	LUNA_PRICE_CALLDATA  = LunaPriceCallData{Symbol: "LUNA", Multiplier: MULTIPLIER}
+	FX_PRICE_CALLDATA    = FxPriceCallData{Symbols: []string{"KRW", "MNT", "XDR"}, Multiplier: MULTIPLIER}
+	LUNA_PRICE_END_POINT = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=13&calldata=%x&min_count=4&ask_count=4", LUNA_PRICE_CALLDATA.toBytes())
+	FX_PRICE_END_POINT   = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=9&calldata=%x&min_count=4&ask_count=4", FX_PRICE_CALLDATA.toBytes())
+	VALIDATOR_ADDRESS    = "terravaloper1hwjr0j6v5s8cuwtvza9jaqz7s3nfnxyw4r6st6"
+	cdc                  = app.MakeCodec()
+	activeDenoms         = []string{"ukrw", "uusd", "umnt", "usdr"}
 )
 
 type BandResponse struct {
@@ -88,8 +120,8 @@ type ResponsePacketData struct {
 }
 
 type Packet struct {
-	RequestPacketData  RequestPacketData  `json:"RequestPacketData"`
-	ResponsePacketData ResponsePacketData `json:"ResponsePacketData"`
+	RequestPacketData  RequestPacketData  `json:"request_packet_data"`
+	ResponsePacketData ResponsePacketData `json:"response_packet_data"`
 }
 
 type BandResult struct {
@@ -97,6 +129,18 @@ type BandResult struct {
 	Reports []Reports `json:"reports"`
 	Result  Packet    `json:"result"`
 }
+
+type LunaPrice struct {
+	CryptoCompareUSD uint64
+	CoinGeckoUSD     uint64
+	HuobiproUSD      uint64
+	BittrexUSD       uint64
+	BithumbKRW       uint64
+	CoinoneKRW       uint64
+	CoinmarketcapUSD uint64
+}
+
+type FxPriceUSD []uint64
 
 // GenerateRandomBytes returns securely generated random bytes.
 // It will return an error if the system's secure random
@@ -303,35 +347,140 @@ func InitSDKConfig() {
 	config.Seal()
 }
 
-func getPriceFromBAND() (map[string]sdk.Dec, error) {
-	resp, err := http.Get(BAND_REST)
+func getLUNAPriceFromBAND() (LunaPrice, error) {
+	resp, err := http.Get(LUNA_PRICE_END_POINT)
 	if err != nil {
-		return nil, err
+		return LunaPrice{}, err
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return LunaPrice{}, err
 	}
 
 	br := BandResponse{}
 	json.Unmarshal(body, &br)
 
-	res := br.Result.Result.ResponsePacketData.Result
+	var lp LunaPrice
+	obi.Decode(br.Result.Result.ResponsePacketData.Result, &lp)
 
-	if len(res) != 32 {
-		return nil, fmt.Errorf(fmt.Sprintf("result size should be 32 but got %d", len(res)))
+	return lp, nil
+}
+
+func getStandardCurrencyPriceFromBAND() (FxPriceUSD, error) {
+	resp, err := http.Get(FX_PRICE_END_POINT)
+	if err != nil {
+		return FxPriceUSD{}, err
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return FxPriceUSD{}, err
 	}
 
-	prices := map[string]sdk.Dec{}
-	for i, denom := range activeDenoms {
-		prices[denom] = sdk.
-			NewDec(int64(binary.BigEndian.Uint64(res[i*8 : (i+1)*8]))).
-			Quo(sdk.NewDec(MULTIPLIER))
+	br := BandResponse{}
+	json.Unmarshal(body, &br)
+
+	var fpu FxPriceUSD
+	obi.Decode(br.Result.Result.ResponsePacketData.Result, &fpu)
+
+	return fpu, nil
+}
+
+func medianDec(decs []sdk.Dec) sdk.Dec {
+	sort.Slice(decs, func(i, j int) bool {
+		return decs[i].LT(decs[j])
+	})
+	return decs[len(decs)/2]
+}
+
+func getPrice() (map[string]sdk.Dec, error) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	ch1 := make(chan struct {
+		LunaPrice
+		error
+	}, 1)
+	ch2 := make(chan struct {
+		FxPriceUSD
+		error
+	}, 1)
+	done := make(chan struct{})
+	defer close(ch1)
+	defer close(ch2)
+
+	go func() {
+		defer wg.Done()
+		lp, err := getLUNAPriceFromBAND()
+		ch1 <- struct {
+			LunaPrice
+			error
+		}{lp, err}
+	}()
+	go func() {
+		defer wg.Done()
+		fpu, err := getStandardCurrencyPriceFromBAND()
+		ch2 <- struct {
+			FxPriceUSD
+			error
+		}{fpu, err}
+	}()
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done: // All done
+	case <-time.After(3 * time.Second): // Only wait for 3 secs
+		close(done)
+		return nil, fmt.Errorf("get price timeout")
 	}
 
-	return prices, nil
+	r1 := <-ch1
+	r2 := <-ch2
+
+	lp, err := r1.LunaPrice, r1.error
+	if err != nil {
+		return nil, err
+	}
+
+	fpu, err := r2.FxPriceUSD, r2.error
+	if err != nil {
+		return nil, err
+	}
+
+	multiplier := sdk.NewDec(MULTIPLIER)
+
+	medKRW := medianDec([]sdk.Dec{
+		sdk.NewDec(int64(lp.BithumbKRW)).Quo(multiplier),
+		sdk.NewDec(int64(lp.CoinoneKRW)).Quo(multiplier),
+		sdk.NewDec(int64(lp.BittrexUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
+		sdk.NewDec(int64(lp.CoinGeckoUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
+		sdk.NewDec(int64(lp.CryptoCompareUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
+		sdk.NewDec(int64(lp.HuobiproUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
+		sdk.NewDec(int64(lp.CoinmarketcapUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
+	})
+
+	medUSD := medianDec([]sdk.Dec{
+		sdk.NewDec(int64(lp.BithumbKRW)).Mul(sdk.NewDec(int64(fpu[0]))).Quo(multiplier),
+		sdk.NewDec(int64(lp.CoinoneKRW)).Mul(sdk.NewDec(int64(fpu[0]))).Quo(multiplier),
+		sdk.NewDec(int64(lp.BittrexUSD)),
+		sdk.NewDec(int64(lp.CoinGeckoUSD)),
+		sdk.NewDec(int64(lp.CryptoCompareUSD)),
+		sdk.NewDec(int64(lp.HuobiproUSD)),
+		sdk.NewDec(int64(lp.CoinmarketcapUSD)),
+	})
+
+	return map[string]sdk.Dec{
+		"ukrw": medKRW,
+		"uusd": medUSD.Quo(multiplier),
+		"umnt": medUSD.Quo(sdk.NewDec(int64(fpu[1]))),
+		"usdr": medUSD.Quo(sdk.NewDec(int64(fpu[2]))),
+	}, nil
 }
 
 func hasPrevotesForAllDenom(prevotes terra_types.ExchangeRatePrevotes) bool {
@@ -409,7 +558,7 @@ func main() {
 						msgs = append(msgs, vote)
 					}
 
-					prices, err := getPriceFromBAND()
+					prices, err := getPrice()
 					if err != nil {
 						fmt.Println(err.Error())
 						return
@@ -443,7 +592,7 @@ func main() {
 				} else {
 					fmt.Println("create new prevotes")
 
-					prices, err := getPriceFromBAND()
+					prices, err := getPrice()
 					if err != nil {
 						fmt.Println(err.Error())
 						return
