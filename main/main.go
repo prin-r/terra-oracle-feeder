@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
+	"runtime"
 	"sort"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/client/context"
@@ -58,11 +60,12 @@ var (
 	TERRA_KEYNAME        = "q"
 	TERRA_KEY_PASSWORD   = "12345678"
 	TERRA_CHAIN_ID       = "terra-q"
+	GET_PRICE_TIME_OUT   = 10 * time.Second
 	MULTIPLIER           = int64(1000000)
 	LUNA_PRICE_CALLDATA  = LunaPriceCallData{Symbol: "LUNA", Multiplier: MULTIPLIER}
 	FX_PRICE_CALLDATA    = FxPriceCallData{Symbols: []string{"KRW", "MNT", "XDR"}, Multiplier: MULTIPLIER}
-	LUNA_PRICE_END_POINT = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=13&calldata=%x&min_count=4&ask_count=4", LUNA_PRICE_CALLDATA.toBytes())
-	FX_PRICE_END_POINT   = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=9&calldata=%x&min_count=4&ask_count=4", FX_PRICE_CALLDATA.toBytes())
+	LUNA_PRICE_END_POINT = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=13&calldata=%x&min_count=3&ask_count=4", LUNA_PRICE_CALLDATA.toBytes())
+	FX_PRICE_END_POINT   = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=9&calldata=%x&min_count=3&ask_count=4", FX_PRICE_CALLDATA.toBytes())
 	VALIDATOR_ADDRESS    = "terravaloper1hwjr0j6v5s8cuwtvza9jaqz7s3nfnxyw4r6st6"
 	cdc                  = app.MakeCodec()
 	activeDenoms         = []string{"ukrw", "uusd", "umnt", "usdr"}
@@ -131,13 +134,13 @@ type BandResult struct {
 }
 
 type LunaPrice struct {
-	CryptoCompareUSD uint64
-	CoinGeckoUSD     uint64
-	HuobiproUSD      uint64
-	BittrexUSD       uint64
-	BithumbKRW       uint64
-	CoinoneKRW       uint64
-	CoinmarketcapUSD uint64
+	CryptoCompareUSD int64
+	CoinGeckoUSD     int64
+	HuobiproUSD      int64
+	BittrexUSD       int64
+	BithumbKRW       int64
+	CoinoneKRW       int64
+	CoinmarketcapUSD int64
 }
 
 type FxPriceUSD []uint64
@@ -182,11 +185,43 @@ type Feeder struct {
 	votes             map[string]terra_types.MsgExchangeRateVote
 }
 
+func logError(err error) {
+	pc, fn, line, _ := runtime.Caller(1)
+	log.Printf("‼️ %s[%s:%d] %v", runtime.FuncForPC(pc).Name(), fn, line, err)
+}
+
+func printStatus(head string, status string, res *sdk.TxResponse) {
+	tail := "✧･ﾟ✨:* success *:✨･ﾟ✧"
+	if res.Code != 0 {
+		head = "🚫"
+		tail = "fail ⁉️"
+	}
+	fmt.Printf("%s %s : %s : %s \n", head, status, res.TxHash, tail)
+}
+
+func decsPretty(decs []sdk.Dec) string {
+	tmp := []string{}
+	for _, dec := range decs {
+		s := dec.String()
+		if strings.Index(s, ".")+6 <= len(s) {
+			tmp = append(tmp, s[:strings.Index(s, ".")+6])
+		} else {
+			tmp = append(tmp, s)
+		}
+	}
+	return fmt.Sprintf("%v", tmp)
+}
+
 func (f *Feeder) fetchParams() {
 	res, err := f.terraClient.ABCIQuery(fmt.Sprintf("custom/%s/%s", terra_types.QuerierRoute, terra_types.QueryParameters), nil)
+	if err != nil {
+		logError(err)
+		return
+	}
+
 	err = cdc.UnmarshalJSON(res.Response.GetValue(), &f.Params)
 	if err != nil {
-		fmt.Println("Fail to unmarshal Params json", err.Error())
+		logError(fmt.Errorf("Fail to unmarshal Params json: %v", err))
 		return
 	}
 }
@@ -196,7 +231,7 @@ func (f *Feeder) commitNewVotes(prices map[string]sdk.Dec) {
 	// We use 4 here
 	salt, err := generateRandomString(4)
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Println(err.Error(), 205)
 		return
 	}
 
@@ -224,7 +259,7 @@ func (f *Feeder) MsgPrevotesFromCurrentCommitVotes() ([]terra_types.MsgExchangeR
 
 		voteHash, err := terra_types.VoteHash(vote.Salt, vote.ExchangeRate, vote.Denom, f.validator)
 		if err != nil {
-			fmt.Println(err.Error())
+			logError(err)
 			return nil, err
 		}
 
@@ -246,7 +281,7 @@ func (f *Feeder) getPrevote() (terra_types.ExchangeRatePrevotes, error) {
 
 	bz, err := cdc.MarshalJSON(params)
 	if err != nil {
-		fmt.Println("Fail to marshal prevote params", err.Error())
+		logError(fmt.Errorf("Fail to marshal prevote params: %v", err))
 		return erps, err
 	}
 
@@ -254,7 +289,7 @@ func (f *Feeder) getPrevote() (terra_types.ExchangeRatePrevotes, error) {
 
 	err = cdc.UnmarshalJSON(res.Response.GetValue(), &erps)
 	if err != nil {
-		fmt.Println("Fail to unmarshal Params json", err.Error())
+		logError(fmt.Errorf("Fail to unmarshal Params json: %v", err))
 		return erps, err
 	}
 
@@ -272,7 +307,7 @@ func (f *Feeder) allVotesAndPrevotesAreCorrespond(prevotes terra_types.ExchangeR
 		}
 		voteHash, err := terra_types.VoteHash(vote.Salt, vote.ExchangeRate, vote.Denom, f.validator)
 		if err != nil {
-			fmt.Println(err.Error())
+			logError(err)
 			return false
 		}
 		if fmt.Sprintf("%x", voteHash) != pv.Hash {
@@ -285,7 +320,7 @@ func (f *Feeder) allVotesAndPrevotesAreCorrespond(prevotes terra_types.ExchangeR
 func (f *Feeder) broadcast(msgs []sdk.Msg) (*sdk.TxResponse, error) {
 	keybase, err := keys.NewKeyBaseFromDir(TERRA_KEYBASE_DIR)
 	if err != nil {
-		fmt.Println("Fail to create keybase from dir :", err.Error())
+		logError(fmt.Errorf("Fail to create keybase from dir: %v", err))
 		return nil, err
 	}
 
@@ -397,90 +432,112 @@ func medianDec(decs []sdk.Dec) sdk.Dec {
 }
 
 func getPrice() (map[string]sdk.Dec, error) {
-	var wg sync.WaitGroup
-	wg.Add(2)
+	type priceWithErr struct {
+		Val interface{}
+		Err error
+	}
 
-	ch1 := make(chan struct {
-		LunaPrice
-		error
-	}, 1)
-	ch2 := make(chan struct {
-		FxPriceUSD
-		error
-	}, 1)
-	done := make(chan struct{})
-	defer close(ch1)
-	defer close(ch2)
+	ch := make(chan priceWithErr, 2)
 
 	go func() {
-		defer wg.Done()
 		lp, err := getLUNAPriceFromBAND()
-		ch1 <- struct {
-			LunaPrice
-			error
-		}{lp, err}
+		ch <- priceWithErr{Val: lp, Err: err}
 	}()
 	go func() {
-		defer wg.Done()
 		fpu, err := getStandardCurrencyPriceFromBAND()
-		ch2 <- struct {
-			FxPriceUSD
-			error
-		}{fpu, err}
-	}()
-	go func() {
-		wg.Wait()
-		close(done)
+		ch <- priceWithErr{Val: fpu, Err: err}
 	}()
 
-	select {
-	case <-done: // All done
-	case <-time.After(3 * time.Second): // Only wait for 3 secs
-		close(done)
-		return nil, fmt.Errorf("get price timeout")
+	priceWithErrList := []priceWithErr{}
+	start := time.Now()
+	for len(priceWithErrList) < 2 {
+		x, ok := <-ch
+		if ok {
+			priceWithErrList = append(priceWithErrList, x)
+		}
+		if time.Since(start) >= GET_PRICE_TIME_OUT {
+			return nil, fmt.Errorf("⏰ getting price has timeout")
+		}
 	}
 
-	r1 := <-ch1
-	r2 := <-ch2
-
-	lp, err := r1.LunaPrice, r1.error
-	if err != nil {
-		return nil, err
-	}
-
-	fpu, err := r2.FxPriceUSD, r2.error
-	if err != nil {
-		return nil, err
+	var lp LunaPrice
+	var fpu FxPriceUSD
+	for _, pwe := range priceWithErrList {
+		if pwe.Err != nil {
+			return nil, pwe.Err
+		}
+		switch pwe.Val.(type) {
+		case LunaPrice:
+			lp = pwe.Val.(LunaPrice)
+		case FxPriceUSD:
+			fpu = pwe.Val.(FxPriceUSD)
+		default:
+			return nil, fmt.Errorf("unknown type %v", pwe.Val)
+		}
 	}
 
 	multiplier := sdk.NewDec(MULTIPLIER)
 
-	medKRW := medianDec([]sdk.Dec{
-		sdk.NewDec(int64(lp.BithumbKRW)).Quo(multiplier),
-		sdk.NewDec(int64(lp.CoinoneKRW)).Quo(multiplier),
-		sdk.NewDec(int64(lp.BittrexUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
-		sdk.NewDec(int64(lp.CoinGeckoUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
-		sdk.NewDec(int64(lp.CryptoCompareUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
-		sdk.NewDec(int64(lp.HuobiproUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
-		sdk.NewDec(int64(lp.CoinmarketcapUSD)).Quo(sdk.NewDec(int64(fpu[0]))),
-	})
+	fmt.Printf("🌕 luna prices: %v \n", lp)
+	fmt.Printf("💵 fx prices: %v \n", fpu)
 
-	medUSD := medianDec([]sdk.Dec{
-		sdk.NewDec(int64(lp.BithumbKRW)).Mul(sdk.NewDec(int64(fpu[0]))).Quo(multiplier),
-		sdk.NewDec(int64(lp.CoinoneKRW)).Mul(sdk.NewDec(int64(fpu[0]))).Quo(multiplier),
-		sdk.NewDec(int64(lp.BittrexUSD)),
-		sdk.NewDec(int64(lp.CoinGeckoUSD)),
-		sdk.NewDec(int64(lp.CryptoCompareUSD)),
-		sdk.NewDec(int64(lp.HuobiproUSD)),
-		sdk.NewDec(int64(lp.CoinmarketcapUSD)),
-	})
+	krws := []sdk.Dec{}
+	usds := []sdk.Dec{}
+	if lp.BithumbKRW >= 0 {
+		krws = append(krws, sdk.NewDec(lp.BithumbKRW).Quo(multiplier))
+		usds = append(usds, sdk.NewDec(lp.BithumbKRW).Mul(sdk.NewDec(int64(fpu[0]))).Quo(multiplier))
+	}
+	if lp.CoinoneKRW >= 0 {
+		krws = append(krws, sdk.NewDec(lp.CoinoneKRW).Quo(multiplier))
+		usds = append(usds, sdk.NewDec(lp.CoinoneKRW).Mul(sdk.NewDec(int64(fpu[0]))).Quo(multiplier))
+	}
+	if lp.BittrexUSD >= 0 {
+		krws = append(krws, sdk.NewDec(lp.BittrexUSD).Quo(sdk.NewDec(int64(fpu[0]))))
+		usds = append(usds, sdk.NewDec(lp.BittrexUSD))
+	}
+	if lp.CoinGeckoUSD >= 0 {
+		krws = append(krws, sdk.NewDec(lp.CoinGeckoUSD).Quo(sdk.NewDec(int64(fpu[0]))))
+		usds = append(usds, sdk.NewDec(lp.CoinGeckoUSD))
+	}
+	if lp.CryptoCompareUSD >= 0 {
+		krws = append(krws, sdk.NewDec(lp.CryptoCompareUSD).Quo(sdk.NewDec(int64(fpu[0]))))
+		usds = append(usds, sdk.NewDec(lp.CryptoCompareUSD))
+	}
+	if lp.HuobiproUSD >= 0 {
+		krws = append(krws, sdk.NewDec(lp.HuobiproUSD).Quo(sdk.NewDec(int64(fpu[0]))))
+		usds = append(usds, sdk.NewDec(lp.HuobiproUSD))
+	}
+	if lp.CoinmarketcapUSD >= 0 {
+		krws = append(krws, sdk.NewDec(lp.CoinmarketcapUSD).Quo(sdk.NewDec(int64(fpu[0]))))
+		usds = append(usds, sdk.NewDec(lp.CoinmarketcapUSD))
+	}
 
-	return map[string]sdk.Dec{
+	fmt.Printf("krw rates: %s \n", decsPretty(krws))
+	fmt.Printf("usds rates: %s \n", decsPretty(func() []sdk.Dec {
+		tmp := []sdk.Dec{}
+		for _, x := range usds {
+			tmp = append(tmp, x.Quo(multiplier))
+		}
+		return tmp
+	}()))
+
+	if len(krws) == 0 || len(usds) == 0 {
+		return nil, fmt.Errorf("‼️🔥 fail to get luna price from every sources 🔥‼️")
+	}
+
+	medKRW := medianDec(krws)
+	medUSD := medianDec(usds)
+
+	result := map[string]sdk.Dec{
 		"ukrw": medKRW,
 		"uusd": medUSD.Quo(multiplier),
 		"umnt": medUSD.Quo(sdk.NewDec(int64(fpu[1]))),
 		"usdr": medUSD.Quo(sdk.NewDec(int64(fpu[2]))),
-	}, nil
+	}
+
+	fmt.Printf("🌟 result: %v \n", result)
+
+	return result, nil
 }
 
 func hasPrevotesForAllDenom(prevotes terra_types.ExchangeRatePrevotes) bool {
@@ -515,7 +572,7 @@ func main() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Println("Unknown error", r)
+					logError(fmt.Errorf("Unknown error: %v", r))
 				}
 
 				time.Sleep(1 * time.Second)
@@ -523,20 +580,20 @@ func main() {
 
 			status, err := feeder.terraClient.Status()
 			if err != nil {
-				fmt.Println("Fail to fetch status", err.Error())
+				logError(fmt.Errorf("Fail to fetch status %v", err))
 				return
 			}
 
 			feeder.LatestBlockHeight = status.SyncInfo.LatestBlockHeight
 			currentRound := feeder.LatestBlockHeight / feeder.Params.VotePeriod
 
-			fmt.Println(feeder.LatestBlockHeight, currentRound)
+			fmt.Printf("\rOn LatestBlockHeight=%d currentRound=%d", feeder.LatestBlockHeight, currentRound)
 
 			if currentRound > feeder.LastPrevoteRound {
 				fmt.Println("get prevotes from terra node")
 				prevotes, err := feeder.getPrevote()
 				if err != nil {
-					fmt.Println(err.Error())
+					logError(err)
 					return
 				}
 
@@ -544,14 +601,14 @@ func main() {
 				pass2 := feeder.allVotesAndPrevotesAreCorrespond(prevotes)
 
 				if !pass1 {
-					fmt.Println("not all prevotes found")
+					fmt.Println("🔍 not all prevotes found")
 				}
 				if !pass2 {
-					fmt.Println("there are some votes that do not correspond with the prevotes")
+					fmt.Println("🧂 there are some votes that do not correspond with the prevotes")
 				}
 
 				if pass1 && pass2 {
-					fmt.Println("vote for existed prevotes and then create new prevotes")
+					fmt.Println("🗳️ vote for existed prevotes and then create new prevotes")
 
 					msgs := []sdk.Msg{}
 					for _, vote := range feeder.votes {
@@ -560,14 +617,14 @@ func main() {
 
 					prices, err := getPrice()
 					if err != nil {
-						fmt.Println(err.Error())
+						logError(err)
 						return
 					}
 
 					feeder.commitNewVotes(prices)
 					newPrevotes, err := feeder.MsgPrevotesFromCurrentCommitVotes()
 					if err != nil {
-						fmt.Println(err.Error())
+						logError(err)
 						return
 					}
 					for _, x := range newPrevotes {
@@ -576,16 +633,11 @@ func main() {
 
 					res, err := feeder.broadcast(msgs)
 					if err != nil {
-						fmt.Println(err.Error())
+						logError(err)
 						return
 					}
 
-					fmt.Println("broadcast vote and prevotes : ", res.TxHash, " : ", func() string {
-						if res.Code == 0 {
-							return "✧･ﾟ:* success *:･ﾟ✧"
-						}
-						return "fail"
-					}())
+					printStatus("🍻", "broadcast vote and prevotes", res)
 
 					feeder.LastPrevoteRound = currentRound
 
@@ -594,14 +646,14 @@ func main() {
 
 					prices, err := getPrice()
 					if err != nil {
-						fmt.Println(err.Error())
+						logError(err)
 						return
 					}
 
 					feeder.commitNewVotes(prices)
 					newPrevotes, err := feeder.MsgPrevotesFromCurrentCommitVotes()
 					if err != nil {
-						fmt.Println(err.Error())
+						logError(err)
 						return
 					}
 
@@ -612,16 +664,11 @@ func main() {
 
 					res, err := feeder.broadcast(msgs)
 					if err != nil {
-						fmt.Println(err.Error())
+						logError(err)
 						return
 					}
 
-					fmt.Println("broadcast prevotes only : ", res.TxHash, " : ", func() string {
-						if res.Code == 0 {
-							return "✧･ﾟ:* success *:･ﾟ✧"
-						}
-						return "fail"
-					}())
+					printStatus("🍺", "broadcast prevotes only", res)
 
 					feeder.LastPrevoteRound = currentRound
 				}
