@@ -42,4 +42,4 @@ activeDenoms         = []string{"ukrw", "uusd", "umnt", "usdr"}
 
 ## Main Loop Diagram
 
-![img](https://user-images.githubusercontent.com/12705423/94291949-7d3be800-ff86-11ea-808d-b391c430dd5b.png)
+![img](https://user-images.githubusercontent.com/12705423/94293821-17049480-ff89-11ea-93a3-68eb7ffe4541.png)
