@@ -27,32 +27,6 @@ import (
 	obi "github.com/bandprotocol/band-terra-oracle/obi"
 )
 
-type LunaPriceCallData struct {
-	Symbol     string
-	Multiplier int64
-}
-
-func (cd *LunaPriceCallData) toBytes() []byte {
-	b, err := obi.Encode(*cd)
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
-
-type FxPriceCallData struct {
-	Symbols    []string
-	Multiplier int64
-}
-
-func (cd *FxPriceCallData) toBytes() []byte {
-	b, err := obi.Encode(*cd)
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
-
 var (
 	TERRA_NODE_URI       = "http://localhost:26657"
 	TERRA_REST           = "http://localhost:1317"
@@ -70,6 +44,11 @@ var (
 	cdc                  = app.MakeCodec()
 	activeDenoms         = []string{"ukrw", "uusd", "umnt", "usdr"}
 )
+
+type LunaPriceCallData struct {
+	Symbol     string
+	Multiplier int64
+}
 
 type BandResponse struct {
 	Height int64      `json:"height,string"`
@@ -145,6 +124,36 @@ type LunaPrice struct {
 
 type FxPriceUSD []uint64
 
+type Feeder struct {
+	terraClient       *client.HTTP
+	Params            terra_types.Params
+	validator         sdk.ValAddress
+	LastPrevoteRound  int64
+	LatestBlockHeight int64
+	votes             map[string]terra_types.MsgExchangeRateVote
+}
+
+func (cd *LunaPriceCallData) toBytes() []byte {
+	b, err := obi.Encode(*cd)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+type FxPriceCallData struct {
+	Symbols    []string
+	Multiplier int64
+}
+
+func (cd *FxPriceCallData) toBytes() []byte {
+	b, err := obi.Encode(*cd)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
 // GenerateRandomBytes returns securely generated random bytes.
 // It will return an error if the system's secure random
 // number generator fails to function correctly, in which
@@ -174,15 +183,6 @@ func generateRandomString(n int) (string, error) {
 		bytes[i] = letters[b%byte(len(letters))]
 	}
 	return string(bytes), nil
-}
-
-type Feeder struct {
-	terraClient       *client.HTTP
-	Params            terra_types.Params
-	validator         sdk.ValAddress
-	LastPrevoteRound  int64
-	LatestBlockHeight int64
-	votes             map[string]terra_types.MsgExchangeRateVote
 }
 
 func logError(err error) {
@@ -587,7 +587,7 @@ func main() {
 			feeder.LatestBlockHeight = status.SyncInfo.LatestBlockHeight
 			currentRound := feeder.LatestBlockHeight / feeder.Params.VotePeriod
 
-			fmt.Printf("\rOn LatestBlockHeight=%d currentRound=%d", feeder.LatestBlockHeight, currentRound)
+			fmt.Printf("\rOn latestBlockHeight=%d currentRound=%d", feeder.LatestBlockHeight, currentRound)
 
 			if currentRound > feeder.LastPrevoteRound {
 				fmt.Println("get prevotes from terra node")
