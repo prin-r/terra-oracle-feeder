@@ -39,3 +39,7 @@ activeDenoms         = []string{"ukrw", "uusd", "umnt", "usdr"}
 ## Obi Library
 
 - [obi](/obi)
+
+## Main Loop Diagram
+
+![img](https://user-images.githubusercontent.com/12705423/94291603-0999db00-ff86-11ea-9936-40aefbbfa6d6.png)

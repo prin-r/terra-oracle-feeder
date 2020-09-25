@@ -382,7 +382,7 @@ func InitSDKConfig() {
 	config.Seal()
 }
 
-func getLUNAPriceFromBAND() (LunaPrice, error) {
+func getLUNAPriceFromDataSources() (LunaPrice, error) {
 	resp, err := http.Get(LUNA_PRICE_END_POINT)
 	if err != nil {
 		return LunaPrice{}, err
@@ -403,7 +403,7 @@ func getLUNAPriceFromBAND() (LunaPrice, error) {
 	return lp, nil
 }
 
-func getStandardCurrencyPriceFromBAND() (FxPriceUSD, error) {
+func getStandardCurrencyPrices() (FxPriceUSD, error) {
 	resp, err := http.Get(FX_PRICE_END_POINT)
 	if err != nil {
 		return FxPriceUSD{}, err
@@ -431,7 +431,7 @@ func medianDec(decs []sdk.Dec) sdk.Dec {
 	return decs[len(decs)/2]
 }
 
-func getPrice() (map[string]sdk.Dec, error) {
+func getLUNAPrices() (map[string]sdk.Dec, error) {
 	type priceWithErr struct {
 		Val interface{}
 		Err error
@@ -440,11 +440,11 @@ func getPrice() (map[string]sdk.Dec, error) {
 	ch := make(chan priceWithErr, 2)
 
 	go func() {
-		lp, err := getLUNAPriceFromBAND()
+		lp, err := getLUNAPriceFromDataSources()
 		ch <- priceWithErr{Val: lp, Err: err}
 	}()
 	go func() {
-		fpu, err := getStandardCurrencyPriceFromBAND()
+		fpu, err := getStandardCurrencyPrices()
 		ch <- priceWithErr{Val: fpu, Err: err}
 	}()
 
@@ -597,6 +597,14 @@ func main() {
 					return
 				}
 
+				prices, err := getLUNAPrices()
+				if err != nil {
+					logError(err)
+					return
+				}
+
+				msgs := []sdk.Msg{}
+
 				pass1 := hasPrevotesForAllDenom(prevotes)
 				pass2 := feeder.allVotesAndPrevotesAreCorrespond(prevotes)
 
@@ -610,68 +618,37 @@ func main() {
 				if pass1 && pass2 {
 					fmt.Println("🗳️ vote for existed prevotes and then create new prevotes")
 
-					msgs := []sdk.Msg{}
 					for _, vote := range feeder.votes {
 						msgs = append(msgs, vote)
 					}
-
-					prices, err := getPrice()
-					if err != nil {
-						logError(err)
-						return
-					}
-
-					feeder.commitNewVotes(prices)
-					newPrevotes, err := feeder.MsgPrevotesFromCurrentCommitVotes()
-					if err != nil {
-						logError(err)
-						return
-					}
-					for _, x := range newPrevotes {
-						msgs = append(msgs, x)
-					}
-
-					res, err := feeder.broadcast(msgs)
-					if err != nil {
-						logError(err)
-						return
-					}
-
-					printStatus("🍻", "broadcast vote and prevotes", res)
-
-					feeder.LastPrevoteRound = currentRound
-
 				} else {
 					fmt.Println("create new prevotes")
-
-					prices, err := getPrice()
-					if err != nil {
-						logError(err)
-						return
-					}
-
-					feeder.commitNewVotes(prices)
-					newPrevotes, err := feeder.MsgPrevotesFromCurrentCommitVotes()
-					if err != nil {
-						logError(err)
-						return
-					}
-
-					msgs := []sdk.Msg{}
-					for _, x := range newPrevotes {
-						msgs = append(msgs, x)
-					}
-
-					res, err := feeder.broadcast(msgs)
-					if err != nil {
-						logError(err)
-						return
-					}
-
-					printStatus("🍺", "broadcast prevotes only", res)
-
-					feeder.LastPrevoteRound = currentRound
 				}
+
+				feeder.commitNewVotes(prices)
+				newPrevotes, err := feeder.MsgPrevotesFromCurrentCommitVotes()
+				if err != nil {
+					logError(err)
+					return
+				}
+
+				for _, x := range newPrevotes {
+					msgs = append(msgs, x)
+				}
+
+				res, err := feeder.broadcast(msgs)
+				if err != nil {
+					logError(err)
+					return
+				}
+
+				if pass1 && pass2 {
+					printStatus("🍻", "broadcast vote and prevotes", res)
+				} else {
+					printStatus("🍺", "broadcast prevotes only", res)
+				}
+
+				feeder.LastPrevoteRound = currentRound
 			}
 		}()
 	}
