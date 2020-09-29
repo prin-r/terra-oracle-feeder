@@ -36,7 +36,7 @@ cdc                  = app.MakeCodec()
 activeDenoms         = []string{"ukrw", "uusd", "umnt", "usdr"}
 ```
 
-## Obi Library
+## Dependencies
 
 - [obi](/obi)
 
