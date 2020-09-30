@@ -106,7 +106,7 @@ cd terra-oracle-feeder
 
 ![img](https://user-images.githubusercontent.com/12705423/94695170-c9f53980-035f-11eb-98ae-38b9e9240cdc.png)
 
-![img](https://user-images.githubusercontent.com/12705423/94696299-15f4ae00-0361-11eb-9383-2fead5814d9d.png)
+![img](https://user-images.githubusercontent.com/12705423/94696536-56ecc280-0361-11eb-9ae4-f0d1e1c6ea7b.png)
 
 8. Please note that you should have folder of `terracli`
 
