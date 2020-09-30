@@ -27,7 +27,7 @@ import (
 	obi "github.com/bandprotocol/band-terra-oracle/obi"
 )
 
-// Specific constants for each validator
+// Terra constants
 var (
 	TERRA_NODE_URI     = "http://localhost:26657"
 	TERRA_KEYBASE_DIR  = "/Users/mumu/.terracli"
@@ -37,7 +37,7 @@ var (
 	VALIDATOR_ADDRESS  = "terravaloper1hwjr0j6v5s8cuwtvza9jaqz7s3nfnxyw4r6st6"
 )
 
-// General constants
+// Band constants
 var (
 	GET_PRICE_TIME_OUT   = 10 * time.Second
 	MULTIPLIER           = int64(1000000)
@@ -45,8 +45,12 @@ var (
 	FX_PRICE_CALLDATA    = FxPriceCallData{Symbols: []string{"KRW", "MNT", "XDR"}, Multiplier: MULTIPLIER}
 	LUNA_PRICE_END_POINT = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=13&calldata=%x&min_count=3&ask_count=4", LUNA_PRICE_CALLDATA.toBytes())
 	FX_PRICE_END_POINT   = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=9&calldata=%x&min_count=3&ask_count=4", FX_PRICE_CALLDATA.toBytes())
-	cdc                  = app.MakeCodec()
-	activeDenoms         = []string{"ukrw", "uusd", "umnt", "usdr"}
+)
+
+// General constants
+var (
+	cdc          = app.MakeCodec()
+	activeDenoms = []string{"ukrw", "uusd", "umnt", "usdr"}
 )
 
 type LunaPriceCallData struct {
