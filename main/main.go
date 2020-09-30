@@ -27,20 +27,24 @@ import (
 	obi "github.com/bandprotocol/band-terra-oracle/obi"
 )
 
+// Specific constants for each validator
 var (
-	TERRA_NODE_URI       = "http://localhost:26657"
-	TERRA_REST           = "http://localhost:1317"
-	TERRA_KEYBASE_DIR    = "/Users/mumu/.terracli"
-	TERRA_KEYNAME        = "q"
-	TERRA_KEY_PASSWORD   = "12345678"
-	TERRA_CHAIN_ID       = "terra-q"
+	TERRA_NODE_URI     = "http://localhost:26657"
+	TERRA_KEYBASE_DIR  = "/Users/mumu/.terracli"
+	TERRA_KEYNAME      = "q"
+	TERRA_KEY_PASSWORD = "12345678"
+	TERRA_CHAIN_ID     = "terra-q"
+	VALIDATOR_ADDRESS  = "terravaloper1hwjr0j6v5s8cuwtvza9jaqz7s3nfnxyw4r6st6"
+)
+
+// General constants
+var (
 	GET_PRICE_TIME_OUT   = 10 * time.Second
 	MULTIPLIER           = int64(1000000)
 	LUNA_PRICE_CALLDATA  = LunaPriceCallData{Symbol: "LUNA", Multiplier: MULTIPLIER}
 	FX_PRICE_CALLDATA    = FxPriceCallData{Symbols: []string{"KRW", "MNT", "XDR"}, Multiplier: MULTIPLIER}
 	LUNA_PRICE_END_POINT = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=13&calldata=%x&min_count=3&ask_count=4", LUNA_PRICE_CALLDATA.toBytes())
 	FX_PRICE_END_POINT   = fmt.Sprintf("http://poa-api.bandchain.org/oracle/request_search?oid=9&calldata=%x&min_count=3&ask_count=4", FX_PRICE_CALLDATA.toBytes())
-	VALIDATOR_ADDRESS    = "terravaloper1hwjr0j6v5s8cuwtvza9jaqz7s3nfnxyw4r6st6"
 	cdc                  = app.MakeCodec()
 	activeDenoms         = []string{"ukrw", "uusd", "umnt", "usdr"}
 )
@@ -97,7 +101,7 @@ type ResponsePacketData struct {
 	AnsCount      uint64 `json:"ans_count,string"`
 	RequestTime   uint64 `json:"request_time,string"`
 	ResolveTime   uint64 `json:"resolve_time,string"`
-	ResolveStatus uint8  `json:"resolve_status,string"`
+	ResolveStatus uint8  `json:"resolve_status"`
 	Result        []byte `json:"result,string"`
 }
 
@@ -395,7 +399,10 @@ func getLUNAPriceFromDataSources() (LunaPrice, error) {
 	}
 
 	br := BandResponse{}
-	json.Unmarshal(body, &br)
+	err = json.Unmarshal(body, &br)
+	if err != nil {
+		return LunaPrice{}, fmt.Errorf("fail to unmarshal luna price from ds, %v", err)
+	}
 
 	var lp LunaPrice
 	obi.Decode(br.Result.Result.ResponsePacketData.Result, &lp)
@@ -416,7 +423,10 @@ func getStandardCurrencyPrices() (FxPriceUSD, error) {
 	}
 
 	br := BandResponse{}
-	json.Unmarshal(body, &br)
+	err = json.Unmarshal(body, &br)
+	if err != nil {
+		return FxPriceUSD{}, fmt.Errorf("fail to unmarshal fx price from ds, %v", err)
+	}
 
 	var fpu FxPriceUSD
 	obi.Decode(br.Result.Result.ResponsePacketData.Result, &fpu)
