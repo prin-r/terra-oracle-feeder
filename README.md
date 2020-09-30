@@ -116,6 +116,8 @@ cd terra-oracle-feeder
 go run main/main.go
 ```
 
+![img](https://user-images.githubusercontent.com/12705423/94696798-a6cb8980-0361-11eb-9aef-3c6b59fda837.png)
+
 ## Dependencies
 
 - [obi](/obi)
