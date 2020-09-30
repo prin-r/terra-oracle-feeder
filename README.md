@@ -84,7 +84,7 @@ source ~/.profile
 
 3. Create SSH key for git. So you will be able to `git clone` this repo
 
-```
+```shell=
 ssh-keygen -P "" -t rsa -b 4096 -m pem -f key.pem
 eval `ssh-agent -s`
 ssh-add key.pem
@@ -93,6 +93,26 @@ ssh-add key.pem
 4. Add `key.pem.pub` that you just generated to your github
 
    - [https://docs.github.com/en/enterprise/2.15/user/articles/adding-a-new-ssh-key-to-your-github-account](https://docs.github.com/en/enterprise/2.15/user/articles/adding-a-new-ssh-key-to-your-github-account)
+
+5. Clone this repo
+
+6. Enter the `terra-oracle-feeder`
+
+```shell=
+cd terra-oracle-feeder
+```
+
+7. Change the setting (I use vim)
+
+![img](https://user-images.githubusercontent.com/12705423/94695170-c9f53980-035f-11eb-98ae-38b9e9240cdc.png)
+
+8. Please note that you should have folder of `terracli`
+
+9. Run
+
+```shell=
+go run main/main.go
+```
 
 ## Dependencies
 
