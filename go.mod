@@ -3,9 +3,9 @@ module github.com/bandprotocol/band-terra-oracle
 go 1.23
 
 require (
-	github.com/cosmos/cosmos-sdk v0.37.4
-	github.com/spf13/cobra v1.0.0 // indirect
-	github.com/spf13/viper v1.6.3 // indirect
-	github.com/tendermint/tendermint v0.32.7
-	github.com/terra-project/core v0.3.1
+	github.com/cosmos/cosmos-sdk v0.39.1
+	github.com/tendermint/tendermint v0.33.7
+	github.com/terra-project/core v0.4.0
 )
+
+replace github.com/CosmWasm/go-cosmwasm => github.com/terra-project/go-cosmwasm v0.10.1-terra

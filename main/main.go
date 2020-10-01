@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/client/context"
-	"github.com/cosmos/cosmos-sdk/client/keys"
-	"github.com/tendermint/tendermint/rpc/client"
+	"github.com/cosmos/cosmos-sdk/crypto/keys"
+	client "github.com/tendermint/tendermint/rpc/client/http"
 	"github.com/terra-project/core/app"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -34,12 +34,12 @@ var (
 	TERRA_KEYNAME      = "q"
 	TERRA_KEY_PASSWORD = "12345678"
 	TERRA_CHAIN_ID     = "terra-q"
-	VALIDATOR_ADDRESS  = "terravaloper1hwjr0j6v5s8cuwtvza9jaqz7s3nfnxyw4r6st6"
+	VALIDATOR_ADDRESS  = "terravaloper1q5fz9h24t856tzj52pjymgqk2acay6fxejfrsz"
 )
 
 // Band constants
 var (
-	GET_PRICE_TIME_OUT   = 10 * time.Second
+	GET_PRICE_TIME_OUT   = 20 * time.Second
 	MULTIPLIER           = int64(1000000)
 	LUNA_PRICE_CALLDATA  = LunaPriceCallData{Symbol: "LUNA", Multiplier: MULTIPLIER}
 	FX_PRICE_CALLDATA    = FxPriceCallData{Symbols: []string{"KRW", "MNT", "XDR"}, Multiplier: MULTIPLIER}
@@ -265,14 +265,9 @@ func (f *Feeder) MsgPrevotesFromCurrentCommitVotes() ([]terra_types.MsgExchangeR
 			)
 		}
 
-		voteHash, err := terra_types.VoteHash(vote.Salt, vote.ExchangeRate, vote.Denom, f.validator)
-		if err != nil {
-			logError(err)
-			return nil, err
-		}
-
+		voteHash := terra_types.GetVoteHash(vote.Salt, vote.ExchangeRate, vote.Denom, f.validator)
 		msg := terra_types.NewMsgExchangeRatePrevote(
-			fmt.Sprintf("%x", voteHash),
+			voteHash,
 			denom,
 			sdk.AccAddress(f.validator),
 			f.validator,
@@ -313,12 +308,9 @@ func (f *Feeder) allVotesAndPrevotesAreCorrespond(prevotes terra_types.ExchangeR
 		if vote.Denom != pv.Denom {
 			return false
 		}
-		voteHash, err := terra_types.VoteHash(vote.Salt, vote.ExchangeRate, vote.Denom, f.validator)
-		if err != nil {
-			logError(err)
-			return false
-		}
-		if fmt.Sprintf("%x", voteHash) != pv.Hash {
+		voteHash := terra_types.GetVoteHash(vote.Salt, vote.ExchangeRate, vote.Denom, f.validator)
+
+		if voteHash.Equal(pv.Hash) {
 			return false
 		}
 	}
@@ -326,15 +318,18 @@ func (f *Feeder) allVotesAndPrevotesAreCorrespond(prevotes terra_types.ExchangeR
 }
 
 func (f *Feeder) broadcast(msgs []sdk.Msg) (*sdk.TxResponse, error) {
-	keybase, err := keys.NewKeyBaseFromDir(TERRA_KEYBASE_DIR)
+	keybase, err := keys.NewKeyring("terra", "test", TERRA_KEYBASE_DIR, nil)
 	if err != nil {
 		logError(fmt.Errorf("Fail to create keybase from dir: %v", err))
 		return nil, err
 	}
 
-	txBldr := auth_types.NewTxBuilderFromCLI().
-		WithTxEncoder(auth_types.DefaultTxEncoder(cdc)).
-		WithKeybase(keybase)
+	txBldr := auth_types.NewTxBuilder(
+		auth_types.DefaultTxEncoder(cdc),
+		0, 0, 200000, 0.0, false, TERRA_CHAIN_ID, "",
+		sdk.NewCoins(sdk.NewCoin("uluna", sdk.NewInt(0))),
+		sdk.NewDecCoins(sdk.NewDecCoin("uluna", sdk.NewInt(0))),
+	).WithKeybase(keybase)
 
 	cliCtx := context.NewCLIContext().
 		WithCodec(cdc).
@@ -370,11 +365,15 @@ func (f *Feeder) broadcast(msgs []sdk.Msg) (*sdk.TxResponse, error) {
 }
 
 func NewFeeder() Feeder {
-	feeder := Feeder{}
-	feeder.terraClient = client.NewHTTP(TERRA_NODE_URI, "/websocket")
 	valAddress, err := sdk.ValAddressFromBech32(VALIDATOR_ADDRESS)
 	if err != nil {
 		fmt.Println("Fail to parse validator address", err.Error())
+		panic(err)
+	}
+	feeder := Feeder{}
+	feeder.terraClient, err = client.New(TERRA_NODE_URI, "/websocket")
+	if err != nil {
+		fmt.Println("Fail to create http client", err.Error())
 		panic(err)
 	}
 	feeder.validator = valAddress
@@ -405,7 +404,7 @@ func getLUNAPriceFromDataSources() (LunaPrice, error) {
 	br := BandResponse{}
 	err = json.Unmarshal(body, &br)
 	if err != nil {
-		return LunaPrice{}, fmt.Errorf("fail to unmarshal luna price from ds, %v", err)
+		return LunaPrice{}, fmt.Errorf("fail to unmarshal luna price from ds, %v, %s", err, string(body[:]))
 	}
 
 	var lp LunaPrice
@@ -429,7 +428,7 @@ func getStandardCurrencyPrices() (FxPriceUSD, error) {
 	br := BandResponse{}
 	err = json.Unmarshal(body, &br)
 	if err != nil {
-		return FxPriceUSD{}, fmt.Errorf("fail to unmarshal fx price from ds, %v", err)
+		return FxPriceUSD{}, fmt.Errorf("fail to unmarshal fx price from ds, %v, %s", err, string(body[:]))
 	}
 
 	var fpu FxPriceUSD
